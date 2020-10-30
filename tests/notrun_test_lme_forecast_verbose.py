@@ -1,8 +1,7 @@
 import numpy as np
-import pdb
 import pytest
-from lme.lme_forecast_verbose import LME
-import lme.rutils as rutils
+from flme.lme_forecast_verbose import LME
+import flme.rutils as rutils
 
 
 class TestLME:
@@ -36,7 +35,7 @@ class TestLME:
         x = np.random.randn(np.prod(indicator))
 
         assert (np.linalg.norm(model.X(x) - Z.dot(x)) < 1e-10) and \
-             (np.linalg.norm(model.XT(y) - np.transpose(Z).dot(y)) < 1e-10)
+            (np.linalg.norm(model.XT(y) - np.transpose(Z).dot(y)) < 1e-10)
 
     @pytest.mark.parametrize("dimensions", [[5, 4, 3, 2], [5, 4, 1, 2]])
     @pytest.mark.parametrize("cov_dim", [[5, 1, 1, 2], [1, 4, 1, 1], [1, 1, 1, 1]])
@@ -83,7 +82,7 @@ class TestLME:
         delta_true = .005
         Y = Y_true + np.random.randn(N)*np.sqrt(delta_true)
         model = LME(dimensions, 0, Y, {'cov1': (X[:, 0], [True]*len(dimensions)),
-                    'cov2': (X[:, 1], [True]*len(dimensions))}, {},
+                                       'cov2': (X[:, 1], [True]*len(dimensions))}, {},
                     {'cov1': [-float('inf'), float('inf')], 'cov2': [-float('inf'), float('inf')]}, False, {})
         model.optimize(inner_print_level=0)
         assert model.gamma_soln == 1e-8
@@ -108,7 +107,7 @@ class TestLME:
         Y_true += Z.dot(u)
         Y = Y_true + np.random.randn(N) * np.sqrt(delta_true)
         model1 = LME(dimensions, 1, Y, {},
-                    {}, {}, False, random_effects=dct1)
+                     {}, {}, False, random_effects=dct1)
         model1.optimize(inner_print_level=0)
         gamma1 = model1.gamma_soln
         u_var1 = np.var(model1.u_soln)
@@ -143,11 +142,11 @@ class TestLME:
         _, u_samples = model.draw(n_draws=n_draws)
 
         u1 = np.concatenate([u[:np.prod(random_effects[0][1:])] for u in model.u_soln])
-        u1_sample_mean = np.mean(u_samples[0].reshape((-1, n_draws)),axis=1)
+        u1_sample_mean = np.mean(u_samples[0].reshape((-1, n_draws)), axis=1)
         assert np.linalg.norm(u1 - u1_sample_mean)/np.linalg.norm(u1) < .05
         u2 = np.concatenate([u[np.prod(random_effects[0][1:]):np.prod(random_effects[0][1:])
                                + np.prod(random_effects[1][1:])] for u in model.u_soln])
-        u2_sample_mean = np.mean(u_samples[1].reshape((-1, n_draws)),axis=1)
+        u2_sample_mean = np.mean(u_samples[1].reshape((-1, n_draws)), axis=1)
         assert np.linalg.norm(u2 - u2_sample_mean)/np.linalg.norm(u2) < .05
 
         model.outputDraws()

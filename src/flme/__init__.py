@@ -1,3 +1,3 @@
-from lme.lme_forecast_verbose import LME
-import lme.utils
-import lme.rutils
+from flme.lme_forecast_verbose import LME
+import flme.utils
+import flme.rutils
