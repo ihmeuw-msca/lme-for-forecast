@@ -22,4 +22,6 @@ __pycache__
 
 # Jupyter Notebook
 .ipynb_checkpoints
-© 2019 GitHub, Inc.
+
+# vscode
+.vscode
