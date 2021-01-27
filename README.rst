@@ -15,8 +15,8 @@ LimeTr Wrapper for Forecast Team
     :target: https://github.com/ramittal/lme-for-forecast/actions?query=workflow%3Abuild
     :alt: BuildStatus
 
-.. image:: https://badge.fury.io/py/lme-for-forecast.svg
-    :target: https://badge.fury.io/py/lme-for-forecast
+.. image:: https://badge.fury.io/py/flme.svg
+    :target: https://badge.fury.io/py/flme
     :alt: PyPI
 
 .. image:: https://coveralls.io/repos/github/ramittal/lme-for-forecast/badge.svg?branch=master
