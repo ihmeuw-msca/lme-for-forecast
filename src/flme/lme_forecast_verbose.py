@@ -1,16 +1,25 @@
-import numpy as np
-import flme.rutils as rutils
 import copy
 from collections import namedtuple
-from limetr import LimeTr
-from limetr.utils import VarMat
+
+import numpy as np
+from spmat.dlmat import BDLMat
+
+import flme.rutils as rutils
+from flme.limetr import LimeTr
 
 
 class LME:
-
-    def __init__(self, dimensions, n_grouping_dims, y, covariates,
-                 indicators, global_effects_names,
-                 global_intercept, random_effects):
+    def __init__(
+        self,
+        dimensions,
+        n_grouping_dims,
+        y,
+        covariates,
+        indicators,
+        global_effects_names,
+        global_intercept,
+        random_effects,
+    ):
         """
         Create a linear mixed effects model (LME) object
 
@@ -143,12 +152,12 @@ class LME:
         #    err_msg = 'Dimensions should all be > 1.'
         #    raise ValueError(err_msg)
         if n_grouping_dims < 0:
-            err_msg = 'n_grouping_dims should be non-negative.'
+            err_msg = "n_grouping_dims should be non-negative."
             raise ValueError(err_msg)
         self.dimensions = dimensions
         self.n_grouping_dims = n_grouping_dims
         self.n_groups = int(np.prod(dimensions[:n_grouping_dims]))
-        self.grouping = [np.prod(dimensions[n_grouping_dims:])]*self.n_groups
+        self.grouping = [np.prod(dimensions[n_grouping_dims:])] * self.n_groups
         self.Y = y
         self.N = self.Y.shape[0]
         self.nd = len(dimensions)
@@ -164,7 +173,7 @@ class LME:
             assert len(b) == self.nd
             dims = [1 for _ in range(self.nd)]
             for i in range(self.nd):
-                dims[i] = max(1, int(b[i])*self.dimensions[i])
+                dims[i] = max(1, int(b[i]) * self.dimensions[i])
             return dims
 
         self.covariates = []
@@ -172,7 +181,7 @@ class LME:
         i = 0
         for name, pair in covariates.items():
             if len(pair) != 2:
-                err_msg = 'input for ' + name + 'is not in correct form.'
+                err_msg = "input for " + name + "is not in correct form."
                 raise RuntimeError(err_msg)
             dims = bool_to_size(pair[1])
             assert len(pair[0]) == np.prod(dims)
@@ -181,12 +190,16 @@ class LME:
             i += 1
 
         if global_intercept and indicators != {}:
-            err_msg = 'cannot have both global intercept be True and indicators \
-                       be non-empty.'
+            err_msg = "cannot have both global intercept be True and indicators \
+                       be non-empty."
             raise RuntimeError(err_msg)
-        self.global_ids = [self.cov_name_to_id[name] for name, bounds in global_effects_names.items()]
+        self.global_ids = [
+            self.cov_name_to_id[name] for name, bounds in global_effects_names.items()
+        ]
         if len(self.global_ids) > 0:
-            self.global_cov_bounds = np.transpose(np.array([bounds for name, bounds in global_effects_names.items()]))
+            self.global_cov_bounds = np.transpose(
+                np.array([bounds for name, bounds in global_effects_names.items()])
+            )
             assert self.global_cov_bounds.shape[0] == 2
             assert all(self.global_cov_bounds[1, :] - self.global_cov_bounds[0, :] >= 0)
         else:
@@ -203,9 +216,11 @@ class LME:
             self.indicator_name_to_id[name] = i
             i += 1
 
-        self.beta_names = list(global_effects_names.keys()) + list(self.indicator_name_to_id.keys())
+        self.beta_names = list(global_effects_names.keys()) + list(
+            self.indicator_name_to_id.keys()
+        )
         if self.global_intercept:
-            self.beta_names = ['global_intercept'] + self.beta_names
+            self.beta_names = ["global_intercept"] + self.beta_names
 
         self.ran_list = []
         self.ran_eff_gamma_sd = []
@@ -213,16 +228,25 @@ class LME:
         for name, ran_eff_info in random_effects.items():
             ran_eff = ran_eff_info[0]
             sd = ran_eff_info[1]
-            if not all(ran_eff[:self.n_grouping_dims]):
-                err_msg = name + ': the first ' + str(self.n_grouping_dims) + ' must be \
-                           True for random effects.'
+            if not all(ran_eff[: self.n_grouping_dims]):
+                err_msg = (
+                    name
+                    + ": the first "
+                    + str(self.n_grouping_dims)
+                    + " must be \
+                           True for random effects."
+                )
                 raise RuntimeError(err_msg)
             dims = bool_to_size(ran_eff)
             if sd is not None:
                 self.use_gprior = True
-                self.ran_eff_gamma_sd.extend([sd]*np.prod(dims[self.n_grouping_dims:]))
+                self.ran_eff_gamma_sd.extend(
+                    [sd] * np.prod(dims[self.n_grouping_dims :])
+                )
             else:
-                self.ran_eff_gamma_sd.extend([np.inf]*np.prod(dims[self.n_grouping_dims:]))
+                self.ran_eff_gamma_sd.extend(
+                    [np.inf] * np.prod(dims[self.n_grouping_dims :])
+                )
             if name in self.cov_name_to_id:
                 self.ran_list.append((self.cov_name_to_id[name], dims))
             else:
@@ -248,10 +272,12 @@ class LME:
             ind = self.global_ids[i]
             values, dims = self.covariates[ind]
             assert values.shape[0] == np.prod(dims)
-            y += rutils.repeat(values, dims, self.dimensions)*beta[start+i]
+            y += rutils.repeat(values, dims, self.dimensions) * beta[start + i]
         start += len(self.global_ids)
         for indicator in self.indicators:
-            y += rutils.repeat(beta[start:start + np.prod(indicator)], indicator, self.dimensions)
+            y += rutils.repeat(
+                beta[start : start + np.prod(indicator)], indicator, self.dimensions
+            )
             start += np.prod(indicator)
         return y
 
@@ -286,18 +312,28 @@ class LME:
             if id is None:
                 values = np.ones(self.N)
             else:
-                values = rutils.repeat(self.covariates[id][0], self.covariates[id][1], self.dimensions)
-            self.k_gamma += np.prod(dims[self.n_grouping_dims:])
-            Z.append(values.reshape((-1, 1)) *
-                     np.tile(rutils.kronecker(dims[self.n_grouping_dims:], self.dimensions, self.n_grouping_dims),
-                             (self.n_groups, 1)))
+                values = rutils.repeat(
+                    self.covariates[id][0], self.covariates[id][1], self.dimensions
+                )
+            self.k_gamma += np.prod(dims[self.n_grouping_dims :])
+            Z.append(
+                values.reshape((-1, 1))
+                * np.tile(
+                    rutils.kronecker(
+                        dims[self.n_grouping_dims :],
+                        self.dimensions,
+                        self.n_grouping_dims,
+                    ),
+                    (self.n_groups, 1),
+                )
+            )
         if self.k_gamma > 0:
             self.Z = np.hstack(Z)
             col_norm = np.linalg.norm(self.Z, axis=0)
             if normalize:
-                print('normalizing Z ...')
+                print("normalizing Z ...")
                 print(col_norm)
-                self.Z = self.Z/col_norm
+                self.Z = self.Z / col_norm
             return col_norm
         else:
             self.Z = np.zeros((self.N, 1))
@@ -319,7 +355,9 @@ class LME:
             start += 1
 
         for indicator in self.indicators:
-            X[:, start:start + np.prod(indicator)] = rutils.kronecker(indicator, self.dimensions, 0)
+            X[:, start : start + np.prod(indicator)] = rutils.kronecker(
+                indicator, self.dimensions, 0
+            )
             start += np.prod(indicator)
 
         self.Xm = X
@@ -327,16 +365,31 @@ class LME:
     def _solveBeta(self, S):
         if self.Xm is None:
             self._buildX()
-        A = np.dot(np.transpose(self.Xm)/S**2, self.Xm)
-        b = np.dot(np.transpose(self.Xm)/S, self.Y)
+        A = np.dot(np.transpose(self.Xm) / S**2, self.Xm)
+        b = np.dot(np.transpose(self.Xm) / S, self.Y)
         return np.linalg.solve(A, b)
 
-    def optimize(self, var=None, S=None, trim_percentage=0.0,
-                 share_obs_std=True, fit_fixed=True, inner_print_level=5,
-                 inner_max_iter=100, inner_tol=1e-5, inner_verbose=True,
-                 inner_acceptable_tol=1e-4, inner_nlp_scaling_min_value=1e-8,
-                 outer_verbose=False, outer_max_iter=1, outer_step_size=1,
-                 outer_tol=1e-6, normalize_Z=False, build_X=True, random_seed=0):
+    def optimize(
+        self,
+        var=None,
+        S=None,
+        trim_percentage=0.0,
+        share_obs_std=True,
+        fit_fixed=True,
+        inner_print_level=5,
+        inner_max_iter=100,
+        inner_tol=1e-5,
+        inner_verbose=True,
+        inner_acceptable_tol=1e-4,
+        inner_nlp_scaling_min_value=1e-8,
+        outer_verbose=False,
+        outer_max_iter=1,
+        outer_step_size=1,
+        outer_tol=1e-6,
+        normalize_Z=False,
+        build_X=True,
+        random_seed=0,
+    ):
         """
         Run optimization routine via LimeTr.
 
@@ -398,10 +451,10 @@ class LME:
                 k += 1
             else:
                 k += len(self.grouping)
-        print('n_groups', self.n_groups)
-        print('k_beta', self.k_beta)
-        print('k_gamma', self.k_gamma)
-        print('total number of fixed effects variables', k)
+        print("n_groups", self.n_groups)
+        print("k_beta", self.k_beta)
+        print("k_gamma", self.k_gamma)
+        print("total number of fixed effects variables", k)
 
         if self.k_gamma == 0:
             self.add_re = False
@@ -414,11 +467,11 @@ class LME:
         start = self.k_beta
         for ran in self.ran_list:
             _, dims = ran
-            m = np.prod(dims[self.n_grouping_dims:])
-            c = np.zeros((m-1, k))
-            for i in range(m-1):
-                c[i, start+i] = 1
-                c[i, start+i+1] = -1
+            m = np.prod(dims[self.n_grouping_dims :])
+            c = np.zeros((m - 1, k))
+            for i in range(m - 1):
+                c[i, start + i] = 1
+                c[i, start + i + 1] = -1
             C.append(c)
             start += m
         if len(C) > 0:
@@ -429,38 +482,51 @@ class LME:
 
         C = None
         if len(self.constraints) > 0:
-            def C(var): return self.constraints.dot(var)
+
+            def C(var):
+                return self.constraints.dot(var)
 
         JC = None
         if len(self.constraints) > 0:
-            def JC(var): return self.constraints
+
+            def JC(var):
+                return self.constraints
 
         c = None
         if len(self.constraints) > 0:
             c = np.zeros((2, self.constraints.shape[0]))
 
-        self.uprior = np.array([
-            [-np.inf]*self.k_beta + [1e-7]*self.k_gamma +
-            [1e-7]*(k-self.k_beta-self.k_gamma),
-            [np.inf]*k
-        ])
+        self.uprior = np.array(
+            [
+                [-np.inf] * self.k_beta
+                + [1e-7] * self.k_gamma
+                + [1e-7] * (k - self.k_beta - self.k_gamma),
+                [np.inf] * k,
+            ]
+        )
 
         if self.global_cov_bounds is not None:
             if self.global_intercept:
-                self.uprior[:, 1:len(self.global_ids) + 1] = self.global_cov_bounds
+                self.uprior[:, 1 : len(self.global_ids) + 1] = self.global_cov_bounds
             else:
-                self.uprior[:, :len(self.global_ids)] = self.global_cov_bounds
+                self.uprior[:, : len(self.global_ids)] = self.global_cov_bounds
 
         self.gprior = None
         if self.use_gprior:
             assert len(self.ran_eff_gamma_sd) == self.k_gamma
-            self.gprior = np.array([[0]*k, [np.inf]*self.k_beta + self.ran_eff_gamma_sd
-                                    + [np.inf]*(k-self.k_beta-self.k_gamma)])
+            self.gprior = np.array(
+                [
+                    [0] * k,
+                    [np.inf] * self.k_beta
+                    + self.ran_eff_gamma_sd
+                    + [np.inf] * (k - self.k_beta - self.k_gamma),
+                ]
+            )
 
-        x0 = np.ones(k)*.01
+        x0 = np.ones(k) * 0.01
         if random_seed != 0:
             np.random.seed(random_seed)
-            x0 = np.random.randn(k)*.01
+            x0 = np.random.randn(k) * 0.01
         if var is not None:
             if self.add_re is True:
                 assert len(var) == k
@@ -474,7 +540,7 @@ class LME:
             self._buildX()
         if fit_fixed or self.add_re is False:
             uprior_fixed = copy.deepcopy(self.uprior)
-            uprior_fixed[:, self.k_beta:self.k_beta+self.k_gamma] = 1e-8
+            uprior_fixed[:, self.k_beta : self.k_beta + self.k_gamma] = 1e-8
             if S is None or trim_percentage >= 0.01:
                 model_fixed = LimeTr(
                     self.grouping,
@@ -488,12 +554,18 @@ class LME:
                     C=C,
                     JC=JC,
                     c=c,
-                    inlier_percentage=1.-trim_percentage,
-                    share_obs_std=share_obs_std, uprior=uprior_fixed
+                    inlier_percentage=1.0 - trim_percentage,
+                    share_obs_std=share_obs_std,
+                    uprior=uprior_fixed,
                 )
-                model_fixed.optimize(x0=x0, print_level=inner_print_level, max_iter=inner_max_iter,
-                                     tol=inner_tol, acceptable_tol=inner_acceptable_tol,
-                                     nlp_scaling_min_value=inner_nlp_scaling_min_value)
+                model_fixed.optimize(
+                    x0=x0,
+                    print_level=inner_print_level,
+                    max_iter=inner_max_iter,
+                    tol=inner_tol,
+                    acceptable_tol=inner_acceptable_tol,
+                    nlp_scaling_min_value=inner_nlp_scaling_min_value,
+                )
 
                 x0 = model_fixed.soln
                 self.beta_fixed = model_fixed.beta
@@ -502,12 +574,12 @@ class LME:
                     self.delta_soln = model_fixed.delta
                     self.gamma_soln = model_fixed.gamma
                     self.w_soln = model_fixed.w
-                    self.info = model_fixed.info['status_msg']
+                    self.info = model_fixed.info["status_msg"]
                     self.yfit_no_random = model_fixed.F(model_fixed.beta)
                     return
             else:
                 self.beta_fixed = self._solveBeta(S)
-                x0 = np.append(self.beta_fixed, [1e-8]*self.k_gamma)
+                x0 = np.append(self.beta_fixed, [1e-8] * self.k_gamma)
                 if self.add_re is False:
                     self.beta_soln = self.beta_fixed
                     self.yfit_no_random = self.Xm.dot(self.beta_fixed)
@@ -525,10 +597,10 @@ class LME:
             C=C,
             JC=JC,
             c=c,
-            inlier_percentage=1-trim_percentage,
+            inlier_percentage=1 - trim_percentage,
             share_obs_std=share_obs_std,
             uprior=self.uprior,
-            gprior=self.gprior
+            gprior=self.gprior,
         )
         model.fitModel(
             x0=x0,
@@ -540,7 +612,7 @@ class LME:
             outer_verbose=outer_verbose,
             outer_max_iter=outer_max_iter,
             outer_step_size=outer_step_size,
-            outer_tol=outer_tol
+            outer_tol=outer_tol,
         )
         self.beta_soln = model.beta
         self.gamma_soln = model.gamma
@@ -550,8 +622,8 @@ class LME:
         self.info = model.info
         self.w_soln = model.w
         self.u_soln = model.estimateRE()
-        self.solve_status = model.info['status']
-        self.solve_status_msg = model.info['status_msg']
+        self.solve_status = model.info["status"]
+        self.solve_status_msg = model.info["status_msg"]
 
         self.yfit_no_random = model.F(model.beta)
 
@@ -579,15 +651,19 @@ class LME:
         S2 = []
         if self.S is None:
             if self.share_obs_std is True:
-                S2 = np.ones(self.N)*self.delta_soln
+                S2 = np.ones(self.N) * self.delta_soln
             else:
                 S2 = np.repeat(self.delta_soln, self.grouping)
         else:
             S2 = self.S**2
         S2_split = np.split(S2, self.n_groups)
         for i in range(self.n_groups):
-            self.var_u.append(np.linalg.inv(np.diag(1./self.gamma_soln) +
-                                            (np.transpose(Z_split[i])/S2_split[i]).dot(Z_split[i])))
+            self.var_u.append(
+                np.linalg.inv(
+                    np.diag(1.0 / self.gamma_soln)
+                    + (np.transpose(Z_split[i]) / S2_split[i]).dot(Z_split[i])
+                )
+            )
 
     def _postVarGlobal(self):
         """
@@ -617,7 +693,9 @@ class LME:
             start += 1
 
         for indicator in self.indicators:
-            X[:, start:start + np.prod(indicator)] = rutils.kronecker(indicator, self.dimensions, 0)
+            X[:, start : start + np.prod(indicator)] = rutils.kronecker(
+                indicator, self.dimensions, 0
+            )
             start += np.prod(indicator)
 
         X_split = np.split(X, self.n_groups)
@@ -625,7 +703,7 @@ class LME:
         S2 = []
         if self.S is None:
             if self.share_obs_std is True:
-                S2 = np.ones(self.N)*self.delta_soln
+                S2 = np.ones(self.N) * self.delta_soln
             else:
                 S2 = np.repeat(self.delta_soln, self.grouping)
         else:
@@ -633,9 +711,12 @@ class LME:
         S2_split = np.split(S2, self.n_groups)
 
         for i in range(self.n_groups):
-            V = Z_split[i].dot(np.diag(self.gamma_soln)).dot(np.transpose(Z_split[i])) \
-                + S2_split[i]*np.identity(self.grouping[i])
-            self.var_beta += np.transpose(X_split[i]).dot(np.linalg.inv(V)).dot(X_split[i])
+            V = Z_split[i].dot(np.diag(self.gamma_soln)).dot(
+                np.transpose(Z_split[i])
+            ) + S2_split[i] * np.identity(self.grouping[i])
+            self.var_beta += (
+                np.transpose(X_split[i]).dot(np.linalg.inv(V)).dot(X_split[i])
+            )
         self.var_beta = np.linalg.inv(self.var_beta)
 
     def postVarGlobal(self):
@@ -667,32 +748,50 @@ class LME:
         S2 = []
         if self.S is None:
             if self.share_obs_std is True:
-                S2 = np.ones(self.N)*self.delta_soln
+                S2 = np.ones(self.N) * self.delta_soln
             else:
                 S2 = np.repeat(self.delta_soln, self.grouping)
         else:
             S2 = self.S**2
 
-        mat = VarMat(S2, np.zeros((self.N, self.k_gamma)), self.gamma_soln, self.grouping)
-        self.var_beta = np.dot(np.transpose(X), mat.invDot(X))
+        mat = BDLMat(
+            diags=S2, lmats=np.zeros((self.N, self.k_gamma)), dsizes=self.grouping
+        )
+        self.var_beta = np.dot(np.transpose(X), mat.invdot(X))
         self.var_beta = np.linalg.inv(self.var_beta)
 
     def sampleGlobalWithLimeTr(self, sample_size=100, max_iter=300):
-        beta_samples, gamma_samples = LimeTr.sampleSoln(self.model, sample_size=sample_size, max_iter=max_iter)
+        beta_samples, gamma_samples = LimeTr.sampleSoln(
+            self.model, sample_size=sample_size, max_iter=max_iter
+        )
         return beta_samples, gamma_samples
 
     def _drawBeta(self, n_draws):
         if self.global_cov_bounds is None:
-            return np.transpose(np.random.multivariate_normal(self.beta_soln, self.var_beta, n_draws))
+            return np.transpose(
+                np.random.multivariate_normal(self.beta_soln, self.var_beta, n_draws)
+            )
 
-        bounds = self.uprior[:, :self.k_beta]
+        bounds = self.uprior[:, : self.k_beta]
         # print(bounds)
         beta_samples = np.empty((self.k_beta, 0), float)
         while beta_samples.shape[1] < n_draws:
-            samples = np.transpose(np.random.multivariate_normal(self.beta_soln, self.var_beta, n_draws))
-            beta_samples = np.hstack((beta_samples,
-                                      samples[:, np.all((samples - bounds[0, :].reshape((-1, 1)) >= 0) &
-                                                        (samples - bounds[1, :].reshape((-1, 1)) <= 0), axis=0)]))
+            samples = np.transpose(
+                np.random.multivariate_normal(self.beta_soln, self.var_beta, n_draws)
+            )
+            beta_samples = np.hstack(
+                (
+                    beta_samples,
+                    samples[
+                        :,
+                        np.all(
+                            (samples - bounds[0, :].reshape((-1, 1)) >= 0)
+                            & (samples - bounds[1, :].reshape((-1, 1)) <= 0),
+                            axis=0,
+                        ),
+                    ],
+                )
+            )
         return beta_samples[:, :n_draws]
 
     def draw(self, n_draws=10):
@@ -714,15 +813,20 @@ class LME:
         if self.add_re is True:
             for i in range(self.n_groups):
                 # sample all random effects u in global group i
-                samples = np.random.multivariate_normal(self.u_soln[i], self.var_u[i], n_draws)
+                samples = np.random.multivariate_normal(
+                    self.u_soln[i], self.var_u[i], n_draws
+                )
                 start = 0
                 for j in range(len(self.ran_list)):
                     ran_eff = self.ran_list[j]
                     dims = ran_eff[1]
                     # extract u related to random effect j
                     u_samples[j].append(
-                        samples[:, start:start + np.prod(dims[self.n_grouping_dims:])].reshape((n_draws, -1)))
-                    start += np.prod(dims[self.n_grouping_dims:])
+                        samples[
+                            :, start : start + np.prod(dims[self.n_grouping_dims :])
+                        ].reshape((n_draws, -1))
+                    )
+                    start += np.prod(dims[self.n_grouping_dims :])
             for i in range(len(u_samples)):
                 # each u_sample is a matrix of dimension n_draws-by-n_groups specific
                 # to that random effect (>= number of global groups)
@@ -772,24 +876,30 @@ class LME:
             samples.append(beta_samples[i, :])
         start = n_cov
         for dim in self.indicators:
-            samples.append(beta_samples[start:start+np.prod(dim), :].reshape(tuple(dim+[n_draws])).squeeze())
+            samples.append(
+                beta_samples[start : start + np.prod(dim), :]
+                .reshape(tuple(dim + [n_draws]))
+                .squeeze()
+            )
             start += np.prod(dim)
         assert start == self.k_beta
         assert len(samples) == len(self.beta_names)
         assert len(u_samples) == len(self.u_names)
 
         samples_name_pairs = zip(samples + u_samples, self.beta_names + self.u_names)
-        Draws = namedtuple('Draws', 'array, name')
+        Draws = namedtuple("Draws", "array, name")
         samples_name_pairs = [Draws(*pair) for pair in samples_name_pairs]
 
         if by_type is True:
             cov_samples = samples_name_pairs[:n_cov]
-            indicator_samples = samples_name_pairs[n_cov:len(self.beta_names)]
-            raneff_samples = samples_name_pairs[len(self.beta_names):]
+            indicator_samples = samples_name_pairs[n_cov : len(self.beta_names)]
+            raneff_samples = samples_name_pairs[len(self.beta_names) :]
             if combine_cov is True:
                 if n_cov > 0:
-                    CovDraws = namedtuple('CovDraws', 'array, names')
-                    cov_samples = CovDraws(beta_samples[:n_cov, :], self.beta_names[:n_cov])
+                    CovDraws = namedtuple("CovDraws", "array, names")
+                    cov_samples = CovDraws(
+                        beta_samples[:n_cov, :], self.beta_names[:n_cov]
+                    )
                 else:
                     cov_samples = None
             return cov_samples, indicator_samples, raneff_samples
