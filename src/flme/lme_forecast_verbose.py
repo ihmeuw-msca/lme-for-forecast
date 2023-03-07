@@ -376,12 +376,8 @@ class LME:
         trim_percentage=0.0,
         share_obs_std=True,
         fit_fixed=True,
-        inner_print_level=5,
-        inner_max_iter=100,
-        inner_tol=1e-5,
+        inner_options=None,
         inner_verbose=True,
-        inner_acceptable_tol=1e-4,
-        inner_nlp_scaling_min_value=1e-8,
         outer_verbose=False,
         outer_max_iter=1,
         outer_step_size=1,
@@ -558,14 +554,7 @@ class LME:
                     share_obs_std=share_obs_std,
                     uprior=uprior_fixed,
                 )
-                model_fixed.optimize(
-                    x0=x0,
-                    print_level=inner_print_level,
-                    max_iter=inner_max_iter,
-                    tol=inner_tol,
-                    acceptable_tol=inner_acceptable_tol,
-                    nlp_scaling_min_value=inner_nlp_scaling_min_value,
-                )
+                model_fixed.optimize(x0=x0, options=inner_options)
 
                 x0 = model_fixed.soln
                 self.beta_fixed = model_fixed.beta
@@ -604,11 +593,7 @@ class LME:
         )
         model.fitModel(
             x0=x0,
-            inner_print_level=inner_print_level,
-            inner_max_iter=inner_max_iter,
-            inner_acceptable_tol=inner_acceptable_tol,
-            inner_nlp_scaling_min_value=inner_nlp_scaling_min_value,
-            inner_tol=inner_tol,
+            inner_options=inner_options,
             outer_verbose=outer_verbose,
             outer_max_iter=outer_max_iter,
             outer_step_size=outer_step_size,
@@ -622,6 +607,7 @@ class LME:
         self.info = model.info
         self.w_soln = model.w
         self.u_soln = model.estimateRE()
+        # TODO: figure out what info contains
         self.solve_status = model.info["status"]
         self.solve_status_msg = model.info["status_msg"]
 
