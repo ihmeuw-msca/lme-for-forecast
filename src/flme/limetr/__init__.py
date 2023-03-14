@@ -1,7 +1,7 @@
 # nonlinear mixed effects model
 from copy import deepcopy
 
-import ipopt
+import cyipopt
 import numpy as np
 from limetr import utils
 from numpy.typing import NDArray
@@ -467,7 +467,7 @@ class LimeTr:
 
         assert x0.size == self.k_total
 
-        opt_problem = ipopt.problem(
+        opt_problem = cyipopt.Problem(
             n=int(self.k_total),
             m=int(self.num_constraints),
             problem_obj=self,
@@ -477,14 +477,14 @@ class LimeTr:
             cu=self.cu,
         )
 
-        opt_problem.addOption("print_level", print_level)
-        opt_problem.addOption("max_iter", max_iter)
-        opt_problem.addOption("tol", tol)
-        opt_problem.addOption("acceptable_tol", acceptable_tol)
+        opt_problem.add_option("print_level", print_level)
+        opt_problem.add_option("max_iter", max_iter)
+        opt_problem.add_option("tol", tol)
+        opt_problem.add_option("acceptable_tol", acceptable_tol)
         if nlp_scaling_method is not None:
-            opt_problem.addOption("nlp_scaling_method", nlp_scaling_method)
+            opt_problem.add_option("nlp_scaling_method", nlp_scaling_method)
         if nlp_scaling_min_value is not None:
-            opt_problem.addOption("nlp_scaling_min_value", nlp_scaling_min_value)
+            opt_problem.add_option("nlp_scaling_min_value", nlp_scaling_min_value)
 
         soln, info = opt_problem.solve(x0)
 
