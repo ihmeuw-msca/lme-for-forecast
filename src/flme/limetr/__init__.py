@@ -1,13 +1,11 @@
 # nonlinear mixed effects model
 from copy import deepcopy
-from typing import Optional
 
+import ipopt
 import numpy as np
+from limetr import utils
 from numpy.typing import NDArray
-from scipy.optimize import LinearConstraint, minimize
 from spmat.dlmat import BDLMat
-
-from flme.limetr import utils
 
 
 class LimeTr:
@@ -17,8 +15,8 @@ class LimeTr:
         k_beta,
         k_gamma,
         Y,
-        X,
-        XT,
+        F,
+        JF,
         Z,
         S=None,
         share_obs_std=False,
@@ -31,6 +29,7 @@ class LimeTr:
         uprior=None,
         gprior=None,
         lprior=None,
+        certain_inlier_id=None,
         inlier_percentage=1.0,
     ):
         """
@@ -46,10 +45,10 @@ class LimeTr:
             dimension of gamma
         Y : ndarray
             study observations
-        X : function
-            covariates matrix-vector multiplication for the fixed effects
-        XT : function
-            covariates matrix-trans-vector multiplication for the fixed effects
+        F : function
+            return the predict observations given beta
+        JF : function
+            return the jacobian function of F
         Z : ndarray
             covariates matrix for the random effect
         S : optional, ndarray
@@ -82,8 +81,8 @@ class LimeTr:
 
         # pass in the data
         self.Y = Y
-        self.X = X
-        self.XT = XT
+        self.F = F
+        self.JF = JF
         self.Z = Z
         self.S = S
         if self.std_flag == 0:
@@ -212,13 +211,7 @@ class LimeTr:
                 self.H = H_new
                 self.JH = JH_new
 
-            # extend Gaussian and Uniform priors
-            if self.use_gprior:
-                gprior_abs = np.array([[0.0] * self.k, [np.inf] * self.k])
-                self.gprior = np.hstack((self.gprior, gprior_abs))
-                self.gm = self.gprior[0]
-                self.gw = 1.0 / self.gprior[1] ** 2
-
+            # extend Uniform priors
             if self.use_uprior:
                 uprior_abs = np.array([[0.0] * self.k, [np.inf] * self.k])
                 self.uprior = np.hstack((self.uprior, uprior_abs))
@@ -227,10 +220,19 @@ class LimeTr:
 
         # trimming option
         self.use_trimming = 0.0 < inlier_percentage < 1.0
+        self.certain_inlier_id = certain_inlier_id
         self.inlier_percentage = inlier_percentage
         self.num_inliers = np.floor(inlier_percentage * self.N)
         self.num_outliers = self.N - self.num_inliers
         self.w = np.repeat(self.num_inliers / self.N, self.N)
+
+        if self.certain_inlier_id is not None:
+            self.certain_inlier_id = np.unique(self.certain_inlier_id)
+            self.active_trimming_id = np.array(
+                [i for i in range(self.N) if i not in self.certain_inlier_id]
+            )
+        else:
+            self.active_trimming_id = None
 
         # specify solution to be None
         self.soln = None
@@ -261,10 +263,16 @@ class LimeTr:
             assert np.all(self.lb <= self.ub)
 
         if self.use_gprior:
-            assert self.gprior.shape == (2, self.k)
             assert np.all(self.gprior[1] > 0.0)
 
         assert 0.0 < self.inlier_percentage <= 1.0
+        if self.use_trimming and self.certain_inlier_id is not None:
+            assert isinstance(self.certain_inlier_id, np.ndarray)
+            assert self.certain_inlier_id.dtype == int
+            assert self.certain_inlier_id.ndim == 1
+            assert self.certain_inlier_id.size <= self.num_inliers
+            assert np.min(self.certain_inlier_id) >= 0
+            assert np.max(self.certain_inlier_id) < self.N
 
         if self.k > self.N:
             print("Warning: information insufficient!")
@@ -275,34 +283,37 @@ class LimeTr:
         delta = np.maximum(0.0, delta)
         return beta, gamma, delta
 
-    def _get_nll_components(self, beta: NDArray, delta: NDArray) -> tuple[NDArray, ...]:
-        F_beta, Y, Z = self.X.dot(beta), self.Y, self.Z
-        if self.std_flag == 0:
-            V = self.V
-        elif self.std_flag == 1:
-            V = np.repeat(delta[0], self.N)
-        elif self.std_flag == 2:
-            V = np.repeat(delta, self.n)
+    def objective(self, x):
+        # unpack variable
+        beta, gamma, delta = self._get_vars(x)
+
         # trimming option
         if self.use_trimming:
             sqrt_w = np.sqrt(self.w)
             sqrt_W = sqrt_w.reshape(self.N, 1)
-            F_beta = F_beta * sqrt_w
-            Y = Y * sqrt_w
-            Z = Z * sqrt_W
-            V = V**self.w
-
-        return F_beta, Y, Z, V
-
-    def objective(self, x: NDArray) -> float:
-        # unpack variable
-        beta, gamma, delta = self._get_vars(x)
-
-        F_beta, Y, Z, V = self._get_nll_components(beta, delta)
+            F_beta = self.F(beta) * sqrt_w
+            Y = self.Y * sqrt_w
+            Z = self.Z * sqrt_W
+            if self.std_flag == 0:
+                V = self.V**self.w
+            elif self.std_flag == 1:
+                V = np.repeat(delta[0], self.N) ** self.w
+            elif self.std_flag == 2:
+                V = np.repeat(delta, self.n) ** self.w
+        else:
+            F_beta = self.F(beta)
+            Y = self.Y
+            Z = self.Z
+            if self.std_flag == 0:
+                V = self.V
+            elif self.std_flag == 1:
+                V = np.repeat(delta[0], self.N)
+            elif self.std_flag == 2:
+                V = np.repeat(delta, self.n)
 
         # residual and variance
         R = Y - F_beta
-        D = BDLMat(diags=V, lmats=Z * np.sqrt(gamma), dsizes=self.n)
+        D = BDLMat(dvecs=V, lmats=Z * np.sqrt(gamma), dsizes=self.n)
 
         val = 0.5 * self.N * np.log(2.0 * np.pi)
         val += 0.5 * D.logdet()
@@ -313,31 +324,50 @@ class LimeTr:
             val += 0.5 * self.hw.dot((self.H(x) - self.hm) ** 2)
 
         if self.use_gprior:
-            val += 0.5 * self.gw.dot((x - self.gm) ** 2)
+            val += 0.5 * self.gw.dot((x[: self.k] - self.gm) ** 2)
 
         if self.use_lprior:
             val += self.lw.dot(x[self.k :])
 
-        val /= self.N * self.inlier_percentage
-
         return val
 
-    def gradient(self, x: NDArray) -> NDArray:
+    def gradient(self, x):
         # unpack variable
         beta, gamma, delta = self._get_vars(x)
 
-        F_beta, Y, Z, V = self._get_nll_components(beta, delta)
+        # trimming option
+        if self.use_trimming:
+            sqrt_w = np.sqrt(self.w)
+            sqrt_W = sqrt_w.reshape(self.N, 1)
+            F_beta = self.F(beta) * sqrt_w
+            JF_beta = self.JF(beta) * sqrt_W
+            Y = self.Y * sqrt_w
+            Z = self.Z * sqrt_W
+            if self.std_flag == 0:
+                V = self.V**self.w
+            elif self.std_flag == 1:
+                V = np.repeat(delta[0], self.N) ** self.w
+            elif self.std_flag == 2:
+                V = np.repeat(delta, self.n) ** self.w
+        else:
+            F_beta = self.F(beta)
+            JF_beta = self.JF(beta)
+            Y = self.Y
+            Z = self.Z
+            if self.std_flag == 0:
+                V = self.V
+            elif self.std_flag == 1:
+                V = np.repeat(delta[0], self.N)
+            elif self.std_flag == 2:
+                V = np.repeat(delta, self.n)
 
         # residual and variance
         R = Y - F_beta
-        D = BDLMat(diags=V, lmats=Z * np.sqrt(gamma), dsizes=self.n)
+        D = BDLMat(dvecs=V, lmats=Z * np.sqrt(gamma), dsizes=self.n)
 
         # gradient for beta
         DR = D.invdot(R)
-        if self.use_trimming:
-            g_beta = -self.XT(np.sqrt(self.w) * DR)
-        else:
-            g_beta = -self.XT(DR)
+        g_beta = -JF_beta.T.dot(DR)
 
         # gradient for gamma
         DZ = D.invdot(Z)
@@ -346,7 +376,6 @@ class LimeTr:
         )
 
         # gradient for delta
-        # TODO: make invdiag function
         if self.std_flag == 0:
             g_delta = np.array([])
         elif self.std_flag == 1:
@@ -370,19 +399,17 @@ class LimeTr:
 
         # add gradient from the gprior
         if self.use_gprior:
-            g += (x - self.gm) * self.gw
+            g += (x[: self.k] - self.gm) * self.gw
 
         # add gradient from the lprior
         if self.use_lprior:
             g = np.hstack((g, self.lw))
 
-        g /= self.N * self.inlier_percentage
-
         return g
 
-    def objective_trimming(self, w: NDArray) -> float:
+    def objectiveTrimming(self, w):
         t = (self.Z**2).dot(self.gamma)
-        r = self.Y - self.X(self.beta)
+        r = self.Y - self.F(self.beta)
         if self.std_flag == 0:
             v = self.V
         elif self.std_flag == 1:
@@ -396,9 +423,20 @@ class LimeTr:
 
         return val
 
-    def gradient_trimming(self, w: NDArray) -> NDArray:
+    def gradientTrimming(self, w, use_ad=False, eps=1e-10):
+        if use_ad:
+            # only use when testing
+            g = np.zeros(self.N)
+            z = w + 0j
+            for i in range(self.N):
+                z[i] += eps * 1j
+                g[i] = self.objectiveTrimming(z).imag / eps
+                z[i] -= eps * 1j
+
+            return g
+
         t = (self.Z**2).dot(self.gamma)
-        r = (self.Y - self.X(self.beta)) ** 2
+        r = (self.Y - self.F(self.beta)) ** 2
         if self.std_flag == 0:
             v = self.V
         elif self.std_flag == 1:
@@ -412,40 +450,75 @@ class LimeTr:
 
         return g
 
-    def optimize(self, x0: Optional[NDArray] = None, options: Optional[dict] = None):
+    def optimize(
+        self,
+        x0=None,
+        print_level=0,
+        max_iter=100,
+        tol=1e-8,
+        acceptable_tol=1e-6,
+        nlp_scaling_method=None,
+        nlp_scaling_min_value=None,
+    ):
         if x0 is None:
             x0 = np.hstack((self.beta, self.gamma, self.delta))
             if self.use_lprior:
                 x0 = np.hstack((x0, np.zeros(self.k)))
 
-        constraints = []
-        if self.use_lprior or self.use_constraints:
-            constraints = [LinearConstraint(self.jacobian(x0), self.cl, self.cu)]
+        assert x0.size == self.k_total
 
-        self.info = minimize(
-            self.objective,
-            x0,
-            method="trust-constr",
-            jac=self.gradient,
-            constraints=constraints,
-            bounds=self.uprior.T,
-            options=options,
+        opt_problem = ipopt.problem(
+            n=int(self.k_total),
+            m=int(self.num_constraints),
+            problem_obj=self,
+            lb=self.uprior[0],
+            ub=self.uprior[1],
+            cl=self.cl,
+            cu=self.cu,
         )
 
-        self.soln = self.info.x
-        self.beta, self.gamma, self.delta = self._get_vars(self.soln)
+        opt_problem.addOption("print_level", print_level)
+        opt_problem.addOption("max_iter", max_iter)
+        opt_problem.addOption("tol", tol)
+        opt_problem.addOption("acceptable_tol", acceptable_tol)
+        if nlp_scaling_method is not None:
+            opt_problem.addOption("nlp_scaling_method", nlp_scaling_method)
+        if nlp_scaling_min_value is not None:
+            opt_problem.addOption("nlp_scaling_min_value", nlp_scaling_min_value)
+
+        soln, info = opt_problem.solve(x0)
+
+        self.soln = soln
+        self.info = info
+        self.beta = soln[self.idx_beta]
+        self.gamma = soln[self.idx_gamma]
+        self.delta = soln[self.idx_delta]
 
     def fitModel(
         self,
-        x0: Optional[NDArray] = None,
-        inner_options: Optional[dict] = None,
+        x0=None,
+        inner_print_level=0,
+        inner_max_iter=20,
+        inner_tol=1e-8,
+        inner_acceptable_tol=1e-6,
+        inner_nlp_scaling_method=None,
+        inner_nlp_scaling_min_value=None,
         outer_verbose=False,
         outer_max_iter=100,
         outer_step_size=1.0,
         outer_tol=1e-6,
+        normalize_trimming_grad=False,
     ):
         if not self.use_trimming:
-            self.optimize(x0=x0, options=inner_options)
+            self.optimize(
+                x0=x0,
+                print_level=inner_print_level,
+                max_iter=inner_max_iter,
+                acceptable_tol=inner_acceptable_tol,
+                nlp_scaling_method=inner_nlp_scaling_method,
+                nlp_scaling_min_value=inner_nlp_scaling_min_value,
+            )
+
             return self.beta, self.gamma, self.w
 
         self.soln = x0
@@ -454,10 +527,23 @@ class LimeTr:
         err = outer_tol + 1.0
 
         while err >= outer_tol:
-            self.optimize(x0=self.soln, options=inner_options)
+            self.optimize(
+                x0=self.soln,
+                print_level=inner_print_level,
+                max_iter=inner_max_iter,
+                tol=inner_tol,
+                acceptable_tol=inner_acceptable_tol,
+                nlp_scaling_method=inner_nlp_scaling_method,
+                nlp_scaling_min_value=inner_nlp_scaling_min_value,
+            )
+
+            w_grad = self.gradientTrimming(self.w)
+            if normalize_trimming_grad:
+                w_grad /= np.linalg.norm(w_grad)
             w_new = utils.projCappedSimplex(
-                self.w - outer_step_size * self.gradient_trimming(self.w),
+                self.w - outer_step_size * w_grad,
                 self.num_inliers,
+                active_id=self.active_trimming_id,
             )
 
             err = np.linalg.norm(w_new - self.w) / outer_step_size
@@ -466,7 +552,7 @@ class LimeTr:
             num_iter += 1
 
             if outer_verbose:
-                obj = self.objective_trimming(self.w)
+                obj = self.objectiveTrimming(self.w)
                 print("iter %4d, obj %8.2e, err %8.2e" % (num_iter, obj, err))
 
             if num_iter >= outer_max_iter:
@@ -489,27 +575,74 @@ class LimeTr:
             S = np.sqrt(np.repeat(self.delta[0], self.N))
         elif self.std_flag == 2:
             S = np.sqrt(np.repeat(self.delta, self.n))
-        iV = 1.0 / S**2
-        iVZ = self.Z * iV.reshape(iV.size, 1)
-        igamma = 1.0 / self.gamma
 
-        R = self.Y - self.X(self.beta)
+        if self.use_trimming:
+            R = (self.Y - self.F(self.beta)) * np.sqrt(self.w)
+            Z = self.Z * (np.sqrt(self.w).reshape(self.N, 1))
+        else:
+            R = self.Y - self.F(self.beta)
+            Z = self.Z
+
+        iV = 1.0 / S**2
+        iVZ = Z * iV.reshape(iV.size, 1)
+
         r = np.split(R, np.cumsum(self.n)[:-1])
-        z = np.split(self.Z, np.cumsum(self.n)[:-1], axis=0)
+        v = np.split(S**2, np.cumsum(self.n)[:-1])
+        z = np.split(Z, np.cumsum(self.n)[:-1], axis=0)
         ivz = np.split(iVZ, np.cumsum(self.n)[:-1], axis=0)
 
-        u = [
-            np.linalg.solve(ivz[i].T.dot(z[i]) + np.diag(igamma), ivz[i].T.dot(r[i]))
-            for i in range(self.m)
-        ]
+        u = []
+        for i in range(self.m):
+            rhs = ivz[i].T.dot(r[i])
+            tmp = z[i] * self.gamma
+            mat = np.diag(v[i]) + tmp.dot(z[i].T)
+            vec = self.gamma * rhs - tmp.T.dot(np.linalg.solve(mat, tmp.dot(rhs)))
+            u.append(vec)
 
         self.u = np.vstack(u)
 
         return self.u
 
-    def simulateData(self, beta_t, gamma_t, sim_prior=True):
+    def estimate_re(
+        self, beta: np.ndarray = None, gamma: np.ndarray = None, use_gamma: bool = True
+    ) -> np.ndarray:
+        beta = self.beta if beta is None else beta
+        gamma = self.gamma if gamma is None else gamma
+        r = np.split(self.Y - self.F(beta), np.cumsum(self.n)[:-1])
+        z = np.split(self.Z, np.cumsum(self.n)[:-1], axis=0)
+        v = np.split(self.S**2, np.cumsum(self.n)[:-1])
+
+        u = []
+        for i in range(self.m):
+            rhs = (z[i].T / v[i]).dot(r[i])
+            if use_gamma:
+                q = (z[i].T / v[i]).dot(z[i]) * gamma + np.identity(self.k_gamma)
+                u.append(gamma[:, None] * np.linalg.inv(q).dot(rhs))
+            else:
+                q = (z[i].T / v[i]).dot(z[i])
+                u.append(np.linalg.inv(q).dot(rhs))
+
+        return np.vstack(u)
+
+    def get_gamma_fisher(self, gamma: np.ndarray) -> np.ndarray:
+        z = np.split(self.Z, np.cumsum(self.n)[:-1], axis=0)
+        v = np.split(self.S**2, np.cumsum(self.n)[:-1])
+        H = np.zeros((self.k_gamma, self.k_gamma))
+        for i in range(self.m):
+            q = np.diag(v[i]) + (z[i] * gamma).dot(z[i].T)
+            q = z[i].T.dot(np.linalg.inv(q).dot(z[i]))
+            H += 0.5 * (q**2)
+        return H
+
+    def simulateData(self, beta_t, gamma_t, sim_prior=True, sim_re=True):
         # sample random effects and measurement error
-        u = np.random.randn(self.m, self.k_gamma) * np.sqrt(gamma_t)
+        if sim_re:
+            u = np.random.randn(self.m, self.k_gamma) * np.sqrt(gamma_t)
+        else:
+            if not hasattr(self, "u"):
+                self.estimateRE()
+            u = self.u
+
         U = np.repeat(u, self.n, axis=0)
         ZU = np.sum(self.Z * U, axis=1)
 
@@ -522,7 +655,7 @@ class LimeTr:
 
         E = np.random.randn(self.N) * S
 
-        self.Y = self.X(beta_t) + ZU + E
+        self.Y = self.F(beta_t) + ZU + E
 
         if sim_prior:
             if self.use_gprior:
@@ -552,6 +685,7 @@ class LimeTr:
         use_uprior=False,
         use_gprior=False,
         know_obs_std=True,
+        share_obs_std=False,
     ):
         m = 10
         n = [5] * m
@@ -560,6 +694,8 @@ class LimeTr:
         k_gamma = 2
         if know_obs_std:
             k_delta = 0
+        elif share_obs_std:
+            k_delta = 1
         else:
             k_delta = m
         k = k_beta + k_gamma + k_delta
@@ -579,11 +715,11 @@ class LimeTr:
 
         Y = X.dot(beta_t) + U + E
 
-        def X_func(beta, X=X):
+        def F(beta, X=X):
             return X.dot(beta)
 
-        def XT_func(beta, X=X):
-            return X.T.dot(beta)
+        def JF(beta, X=X):
+            return X
 
         # constraints, regularizer and priors
         if use_constraints:
@@ -635,8 +771,8 @@ class LimeTr:
             k_beta,
             k_gamma,
             Y,
-            X_func,
-            XT_func,
+            F,
+            JF,
             Z,
             S=S,
             C=C,
@@ -648,6 +784,7 @@ class LimeTr:
             uprior=uprior,
             gprior=gprior,
             inlier_percentage=inlier_percentage,
+            share_obs_std=share_obs_std,
         )
 
     @classmethod
@@ -670,40 +807,45 @@ class LimeTr:
 
         weight = 0.1 * np.linalg.norm(X.T.dot(Y), np.inf)
 
-        def X_func(beta):
+        def F(beta):
             return X.dot(beta)
 
-        def XT_func(beta):
-            return X.T.dot(beta)
+        def JF(beta):
+            return X
 
         uprior = np.array([[-np.inf] * k_beta + [0.0], [np.inf] * k_beta + [0.0]])
         lprior = np.array([[0.0] * k, [np.sqrt(2.0) / weight] * k])
 
-        return cls(
-            n, k_beta, k_gamma, Y, X_func, XT_func, Z, S=S, uprior=uprior, lprior=lprior
-        )
+        return cls(n, k_beta, k_gamma, Y, F, JF, Z, S=S, uprior=uprior, lprior=lprior)
 
     @staticmethod
-    def sampleSoln(lt, sample_size=1, print_level=0, max_iter=100):
+    def sampleSoln(
+        lt, sample_size=1, print_level=0, max_iter=100, sim_prior=True, sim_re=True
+    ):
         beta_samples = np.zeros((sample_size, lt.k_beta))
         gamma_samples = np.zeros((sample_size, lt.k_gamma))
 
         beta_t = lt.beta.copy()
         gamma_t = lt.gamma.copy()
-        delta_t = lt.delta.copy()
 
-        # fix gamma and delta
         lt_copy = deepcopy(lt)
-
-        # lt_copy.uprior[:, lt.idx_gamma] = np.vstack((gamma_t, gamma_t))
-        lt_copy.uprior[:, lt.idx_delta] = np.vstack((delta_t, delta_t))
+        lt_copy.uprior[:, lt.k_beta :] = np.vstack((gamma_t, gamma_t))
 
         for i in range(sample_size):
-            lt_copy.simulateData(beta_t, gamma_t)
-            lt_copy.optimize(print_level=print_level, max_iter=max_iter)
+            lt_copy.simulateData(beta_t, gamma_t, sim_prior=sim_prior, sim_re=sim_re)
+            lt_copy.optimize(
+                x0=np.hstack((beta_t, gamma_t)),
+                print_level=print_level,
+                max_iter=max_iter,
+            )
 
-            beta_samples[i] = lt_copy.beta
-            gamma_samples[i] = lt_copy.gamma
+            u_samples = lt_copy.estimateRE()
+
+            beta_samples[i] = lt_copy.beta.copy()
+            gamma_samples[i] = np.maximum(
+                lt.uprior[0, lt.k_beta :],
+                np.minimum(lt.uprior[1, lt.k_beta :], np.var(u_samples, axis=0)),
+            )
 
             print(
                 "sampling solution progress %0.2f" % ((i + 1) / sample_size), end="\r"

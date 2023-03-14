@@ -741,7 +741,7 @@ class LME:
             S2 = self.S**2
 
         mat = BDLMat(
-            diags=S2, lmats=np.zeros((self.N, self.k_gamma)), dsizes=self.grouping
+            dvecs=S2, lmats=np.zeros((self.N, self.k_gamma)), dsizes=self.grouping
         )
         self.var_beta = np.dot(np.transpose(X), mat.invdot(X))
         self.var_beta = np.linalg.inv(self.var_beta)
