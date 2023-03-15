@@ -3,9 +3,10 @@ from copy import deepcopy
 
 import cyipopt
 import numpy as np
-from limetr import utils
 from numpy.typing import NDArray
 from spmat.dlmat import BDLMat
+
+from . import utils
 
 
 class LimeTr:
