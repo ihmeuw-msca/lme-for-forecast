@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flme"
+version = "0.1.0"
+description = "Wrapper of limetr for FHS"
+readme = "README.rst"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+    { name = "IHME Math Sciences", email = "ihme.math.sciences@gmail.com" },
+]
+dependencies = ["numpy", "scipy", "spmat==0.0.9", "xarray"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+github = "https://github.com/ihmeuw-msca/lme-for-forecast"
