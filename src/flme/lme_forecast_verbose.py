@@ -1,11 +1,10 @@
 import copy
 from collections import namedtuple
 
-import numpy as np
-from spmat.dlmat import BDLMat
-
 import flme.rutils as rutils
+import numpy as np
 from flme.limetr import LimeTr
+from spmat import BDLMat
 
 
 class LME:
@@ -22,10 +21,8 @@ class LME:
     ):
         """
         Create a linear mixed effects model (LME) object
-
         .. math::
             {\bf y} = \beta_0 + X {\bf \beta_c} + K{\bf \beta_I} + Z \{bf u} + \epsilon
-
         where
             :math:`\beta_0` is a global intercept.
             :math:`X` is a matrix for global effects covariates.
@@ -41,12 +38,10 @@ class LME:
             :math:`\epsilon` is a vector of measurement noise terms.
                 :math:`\epsilon` is assumed to follow :math:`N(0, \Sigma)`
                 where :math:`\Sigma` is a diagonal matrix.
-
         To summarize, the fixed effects variables are
         .. math::
             `\beta_0, \beta_c, \beta_I, \text{diag}(\Tau), \text{diag}(\Sigma)`
         and the random effects variable is :math:`u`.
-
         This implementation of LME is designed for input data, including
         measurements data, covariates data, etc., that are organized by a
         certain set of dimensions, e.g. location-age-sex-year. The aforementioned
@@ -59,18 +54,15 @@ class LME:
         the same location and the same age group belong to one set. In this case
         the number of sets is equal to the number of locations times the number
         of age groups.
-
         Because of the special structure of input data, the matrices
         :math:`X, K` and their Jacobians are not formed explicitly in the
         implementation, in order to reduce memory usage.
         :math:`Z` matrix is also not formed in its full dimensions.
         Instead we only pass in its diagonal blocks, since it should have a
         block diagonal structure in general.
-
         The underlying core optimization engine for this program is `LimeTr`,
         which can handle a more general class of linear mixed effects models with
         built-in robust outlier detection methods.
-
         Args:
             dimensions (list[int]):
                 a list specifying dimensions of data. The value of each component
@@ -129,13 +121,11 @@ class LME:
                 Any name that does not appear in ``covariates`` will be interpreted
                 as name for an intercept. Note that the first ``n_grouping_dims``
                 of the boolean list must always be True for all random effects.
-
         Attributes:
             beta_soln (numpy.ndarray): solution for global effects coefficients
             u_soln (list(numpy.ndarray)): solution for random effects coefficients
             yfit (numpy.ndarray): fitted y (dependent variable) values
             solve_status_msg (str): convergence info
-
         Raises:
             ValueError:
                 If any dimension in ``dimensions`` is less than or equal to 1.
@@ -376,8 +366,12 @@ class LME:
         trim_percentage=0.0,
         share_obs_std=True,
         fit_fixed=True,
-        inner_options=None,
+        inner_print_level=5,
+        inner_max_iter=100,
+        inner_tol=1e-5,
         inner_verbose=True,
+        inner_acceptable_tol=1e-4,
+        inner_nlp_scaling_min_value=1e-8,
         outer_verbose=False,
         outer_max_iter=1,
         outer_step_size=1,
@@ -388,7 +382,6 @@ class LME:
     ):
         """
         Run optimization routine via LimeTr.
-
         Args:
             var (numpy.ndarray | None, optional):
                 One-dimensional array that gives initialization for variables.
@@ -554,7 +547,14 @@ class LME:
                     share_obs_std=share_obs_std,
                     uprior=uprior_fixed,
                 )
-                model_fixed.optimize(x0=x0, options=inner_options)
+                model_fixed.optimize(
+                    x0=x0,
+                    print_level=inner_print_level,
+                    max_iter=inner_max_iter,
+                    tol=inner_tol,
+                    acceptable_tol=inner_acceptable_tol,
+                    nlp_scaling_min_value=inner_nlp_scaling_min_value,
+                )
 
                 x0 = model_fixed.soln
                 self.beta_fixed = model_fixed.beta
@@ -593,7 +593,11 @@ class LME:
         )
         model.fitModel(
             x0=x0,
-            inner_options=inner_options,
+            inner_print_level=inner_print_level,
+            inner_max_iter=inner_max_iter,
+            inner_acceptable_tol=inner_acceptable_tol,
+            inner_nlp_scaling_min_value=inner_nlp_scaling_min_value,
+            inner_tol=inner_tol,
             outer_verbose=outer_verbose,
             outer_max_iter=outer_max_iter,
             outer_step_size=outer_step_size,
@@ -607,7 +611,6 @@ class LME:
         self.info = model.info
         self.w_soln = model.w
         self.u_soln = model.estimateRE()
-        # TODO: figure out what info contains
         self.solve_status = model.info["status"]
         self.solve_status_msg = model.info["status_msg"]
 
@@ -628,7 +631,6 @@ class LME:
     def postVarRandom(self):
         """
         y_k = X_k beta + Z_k u_k + epsilon, u has var_mat D, epsilon has var_mat R
-
         Var(u_k) = inv(inv(D) + Z_k'inv(R)Z_k)
         """
         assert len(self.ran_list) > 0
@@ -654,9 +656,7 @@ class LME:
     def _postVarGlobal(self):
         """
         y_k = X_k beta + Z_k u_k + epsilon, u has var_mat D, epsilon has var_mat R
-
         Var(beta) = inv( sum_k X_k' inv(Z_k*D*Z_k' + R) X_k )
-
         """
         assert self.k_beta > 0
         Z_split = np.split(self.Z, self.n_groups)
@@ -741,7 +741,9 @@ class LME:
             S2 = self.S**2
 
         mat = BDLMat(
-            dvecs=S2, lmats=np.zeros((self.N, self.k_gamma)), dsizes=self.grouping
+            S2,
+            np.zeros((self.N, self.k_gamma)) * np.sqrt(self.gamma_soln),
+            self.grouping,
         )
         self.var_beta = np.dot(np.transpose(X), mat.invdot(X))
         self.var_beta = np.linalg.inv(self.var_beta)
@@ -784,10 +786,8 @@ class LME:
         """
         Draw samples of global effects coefficient beta and random intercepts u
         from their corresponding posterior distribution.
-
         Args:
             n_draws(int | 10): number of draws
-
         Returns:
             list(numpy.ndarray):
                 Arrays for beta samples and u samples
@@ -838,14 +838,12 @@ class LME:
         for indicator, age-sex as an example. its original dimension is n_age-by-n_sex,
         thus the `array` dimension is n_age-by-n_sex-by-n_draws;
         random_effects is similar to indicators.
-
         Args:
             n_draws (int | 10): number of draws
             by_type (boolean | True):
                 whether to group samples according to the three types
             combine_cov (boolean | True):
                 whether to combine covariates into one namedtuple
-
         Returns:
             list(namedtuple):
                 List of namedtuples. Each tuple is length two. The first component
@@ -853,7 +851,6 @@ class LME:
                 If ``by_type`` is true, estimates are grouped by type.
                 If ``combine_cov`` is true, global covariates are combined into one
                 namedtuple.
-
         """
         beta_samples, u_samples = self.draw(n_draws)
         samples = []
