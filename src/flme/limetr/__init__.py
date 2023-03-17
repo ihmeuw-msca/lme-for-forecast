@@ -1,5 +1,6 @@
 # nonlinear mixed effects model
 from copy import deepcopy
+from typing import Tuple
 
 import cyipopt
 import numpy as np
@@ -278,7 +279,7 @@ class LimeTr:
         if self.k > self.N:
             print("Warning: information insufficient!")
 
-    def _get_vars(self, x: NDArray) -> tuple[NDArray, NDArray, NDArray]:
+    def _get_vars(self, x: NDArray) -> Tuple[NDArray, NDArray, NDArray]:
         beta, gamma, delta = x[self.idx_beta], x[self.idx_gamma], x[self.idx_delta]
         gamma = np.maximum(0.0, gamma)
         delta = np.maximum(0.0, delta)
