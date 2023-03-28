@@ -11,7 +11,7 @@ license = { file = "LICENSE" }
 authors = [
     { name = "IHME Math Sciences", email = "ihme.math.sciences@gmail.com" },
 ]
-dependencies = ["numpy", "scipy", "spmat==0.0.9", "xarray", "cyipopt"]
+dependencies = ["numpy", "scipy", "spmat==0.0.9", "xarray"]
 
 [project.optional-dependencies]
 test = ["pytest"]
