@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "flme"
-version = "0.1.0"
+version = "0.1.1"
 description = "Wrapper of limetr for FHS"
 readme = "README.rst"
 license = { file = "LICENSE" }
