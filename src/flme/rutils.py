@@ -21,6 +21,7 @@ def repeatTranspose(y, dims, full_dims):
     """
     to compute jacobian
     """
+    y = np.asarray(y)
     values = [y]
     for i in range(len(full_dims)):
         if dims[i] == 1:
@@ -33,7 +34,7 @@ def repeatTranspose(y, dims, full_dims):
             values = temp
     if len(values) == 1:
         assert np.prod(dims) == 1
-        return np.array(list(values))
+        return values[0].reshape(-1)
     assert len(np.squeeze(values)) == np.prod(dims)
     return np.squeeze(values)
 
